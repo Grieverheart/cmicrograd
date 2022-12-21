@@ -1,55 +1,54 @@
-#include <cstdlib>
-#include <cmath>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <math.h>
 
-enum class Operation
+enum Operation
 {
-    NOP,
-    ADD,
-    SUB,
-    NEG,
-    MUL,
-    DIV,
-    POW,
-    RELU,
+    OP_NOP,
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_POW,
+    OP_RELU
 };
 
-static const char* OP_LABELS[]
+static const char* OP_LABELS[] =
 {
     "NOP",
     "ADD",
     "SUB",
-    "NEG",
     "MUL",
     "DIV",
     "POW",
-    "RELU",
+    "RELU"
 };
 
-struct Value
+typedef struct
 {
     size_t id;
-};
+} Value;
 
-struct Queue
+typedef struct
 {
     size_t head;
     size_t tail;
     size_t size;
     size_t* data;
-};
+} Queue;
 
-struct Engine
+typedef struct
 {
     float*     data;
     float*     grad;
-    Operation* op;
+    int*       op;
     size_t*    op_ids;
 
     Queue free_queue;
 
     size_t max_id;
     size_t size_values;
-};
+} Engine;
 
 static Engine _engine;
 
@@ -108,7 +107,7 @@ void queue_free(Queue* queue)
     free(queue->data);
 }
 
-Value make_value(float data, size_t* op_ids = nullptr, Operation op = Operation::NOP)
+Value _make_value(float data, size_t* op_ids, int op)
 {
     if(_engine.free_queue.head == _engine.free_queue.tail)
     {
@@ -117,7 +116,7 @@ Value make_value(float data, size_t* op_ids = nullptr, Operation op = Operation:
         _engine.size_values /= 2;
         _engine.data   = (float*) realloc((void*)_engine.data, _engine.size_values * sizeof(float));
         _engine.grad   = (float*) realloc((void*)_engine.grad, _engine.size_values * sizeof(float));
-        _engine.op     = (Operation*) realloc((void*)_engine.op, _engine.size_values * sizeof(Operation));
+        _engine.op     = (int*) realloc((void*)_engine.op, _engine.size_values * sizeof(int));
         _engine.op_ids = (size_t*) realloc((void*)_engine.op_ids, 2 * _engine.size_values * sizeof(size_t));
         queue_resize(&_engine.free_queue, _engine.size_values);
         for(size_t i = size_values_old; i < _engine.size_values; ++i)
@@ -130,10 +129,16 @@ Value make_value(float data, size_t* op_ids = nullptr, Operation op = Operation:
     _engine.data[id]       = data;
     _engine.grad[id]       = 0.0f;
     _engine.op[id]         = op;
-    _engine.op_ids[2*id+0] = op_ids? op_ids[0]: size_t(-1);
-    _engine.op_ids[2*id+1] = op_ids? op_ids[1]: size_t(-1);
+    _engine.op_ids[2*id+0] = op_ids? op_ids[0]: (size_t)(-1);
+    _engine.op_ids[2*id+1] = op_ids? op_ids[1]: (size_t)(-1);
 
-    return Value{id};
+    Value val = {id};
+    return val;
+}
+
+Value make_value(float data)
+{
+    return _make_value(data, NULL, OP_NOP);
 }
 
 Value val_add(Value a, Value b)
@@ -141,7 +146,7 @@ Value val_add(Value a, Value b)
     size_t op_ids[2] = {a.id, b.id};
     float data_a = _engine.data[a.id];
     float data_b = _engine.data[b.id];
-    return make_value(data_a + data_b, op_ids, Operation::ADD);
+    return _make_value(data_a + data_b, op_ids, OP_ADD);
 }
 
 Value val_sub(Value a, Value b)
@@ -149,7 +154,7 @@ Value val_sub(Value a, Value b)
     size_t op_ids[2] = {a.id, b.id};
     float data_a = _engine.data[a.id];
     float data_b = _engine.data[b.id];
-    return make_value(data_a - data_b, op_ids, Operation::SUB);
+    return _make_value(data_a - data_b, op_ids, OP_SUB);
 }
 
 Value val_mul(Value a, Value b)
@@ -157,7 +162,7 @@ Value val_mul(Value a, Value b)
     size_t op_ids[2] = {a.id, b.id};
     float data_a = _engine.data[a.id];
     float data_b = _engine.data[b.id];
-    return make_value(data_a * data_b, op_ids, Operation::MUL);
+    return _make_value(data_a * data_b, op_ids, OP_MUL);
 }
 
 Value val_div(Value a, Value b)
@@ -165,7 +170,7 @@ Value val_div(Value a, Value b)
     size_t op_ids[2] = {a.id, b.id};
     float data_a = _engine.data[a.id];
     float data_b = _engine.data[b.id];
-    return make_value(data_a / data_b, op_ids, Operation::DIV);
+    return _make_value(data_a / data_b, op_ids, OP_DIV);
 }
 
 Value val_pow(Value a, Value b)
@@ -173,14 +178,19 @@ Value val_pow(Value a, Value b)
     size_t op_ids[2] = {a.id, b.id};
     float data_a = _engine.data[a.id];
     float data_b = _engine.data[b.id];
-    return make_value(pow(data_a, data_b), op_ids, Operation::POW);
+    return _make_value(pow(data_a, data_b), op_ids, OP_POW);
 }
 
 Value val_relu(Value a)
 {
-    size_t op_ids[2] = {a.id, size_t(-1)};
+    size_t op_ids[2] = {a.id, (size_t)(-1)};
     float data_a = _engine.data[a.id];
-    return make_value(data_a < 0.0 ? 0.0: data_a, op_ids, Operation::RELU);
+    return _make_value(data_a < 0.0 ? 0.0: data_a, op_ids, OP_RELU);
+}
+
+Value val_neg(Value a)
+{
+    return val_mul(a, make_value(-1.0));
 }
 
 float val_data(Value a)
@@ -199,27 +209,21 @@ void _backward(size_t id)
     float val_grad = _engine.grad[id];
     switch(_engine.op[id])
     {
-        case Operation::ADD:
+        case OP_ADD:
         {
             _engine.grad[op_ids[0]] += val_grad;
             _engine.grad[op_ids[1]] += val_grad;
         }
         break;
 
-        case Operation::SUB:
+        case OP_SUB:
         {
             _engine.grad[op_ids[0]] += val_grad;
             _engine.grad[op_ids[1]] -= val_grad;
         }
         break;
 
-        case Operation::NEG:
-        {
-            _engine.grad[op_ids[0]] -= val_grad;
-        }
-        break;
-
-        case Operation::MUL:
+        case OP_MUL:
         {
             float data_a = _engine.data[op_ids[0]];
             float data_b = _engine.data[op_ids[1]];
@@ -228,7 +232,7 @@ void _backward(size_t id)
         }
         break;
 
-        case Operation::DIV:
+        case OP_DIV:
         {
             float data_a = _engine.data[op_ids[0]];
             float data_b = _engine.data[op_ids[1]];
@@ -237,7 +241,7 @@ void _backward(size_t id)
         }
         break;
 
-        case Operation::POW:
+        case OP_POW:
         {
             float data_a = _engine.data[op_ids[0]];
             float data_b = _engine.data[op_ids[1]];
@@ -246,7 +250,7 @@ void _backward(size_t id)
         }
         break;
 
-        case Operation::RELU:
+        case OP_RELU:
         {
             float data_a = _engine.data[op_ids[0]];
             _engine.grad[op_ids[0]] += (data_a > 0.0) * val_grad;
@@ -264,7 +268,7 @@ void val_print(Value val)
 {
     float data = _engine.data[val.id];
     float grad = _engine.grad[val.id];
-    Operation op = _engine.op[val.id];
+    int op = _engine.op[val.id];
     printf("Value(data=%f, grad=%f, op=%s)\n", data, grad, OP_LABELS[(int)op]);
 }
 
@@ -284,7 +288,7 @@ void val_backward(Value val)
         for(size_t ci = 0; ci < 2; ++ci)
         {
             size_t child_cid = _engine.op_ids[2*cid+ci];
-            if(child_cid != size_t(-1))
+            if(child_cid != (size_t)(-1))
             {
                 if(!visited[child_cid])
                 {
@@ -308,7 +312,7 @@ void val_backward(Value val)
         for(size_t ci = 0; ci < 2; ++ci)
         {
             size_t child_cid = _engine.op_ids[2*cid+ci];
-            if((child_cid != size_t(-1)) && (--in_degree[child_cid] == 0))
+            if((child_cid != (size_t)(-1)) && (--in_degree[child_cid] == 0))
                 queue_append(&queue, child_cid);
         }
     }
@@ -326,7 +330,7 @@ void build_topo(size_t cid, bool* visited, Queue* queue)
     for(size_t ci = 0; ci < 2; ++ci)
     {
         size_t child_cid = _engine.op_ids[2*cid+ci];
-        if(child_cid != size_t(-1))
+        if(child_cid != (size_t)(-1))
         {
             build_topo(child_cid, visited, queue);
         }
@@ -359,7 +363,7 @@ void engine_init(void)
     _engine.size_values = 10;
     _engine.data   = (float*) malloc(_engine.size_values * sizeof(float));
     _engine.grad   = (float*) malloc(_engine.size_values * sizeof(float));
-    _engine.op     = (Operation*) malloc(_engine.size_values * sizeof(Operation));
+    _engine.op     = (int*) malloc(_engine.size_values * sizeof(int));
     _engine.op_ids = (size_t*) malloc(2 * _engine.size_values * sizeof(size_t));
 
     queue_create(&_engine.free_queue, _engine.size_values);
@@ -393,7 +397,7 @@ void engine_free_expression(Value val)
             visited[cid] = true;
             for(size_t ci = 0; ci < 2; ++ci)
             {
-                if(_engine.op_ids[2*cid+ci] != size_t(-1))
+                if(_engine.op_ids[2*cid+ci] != (size_t)(-1))
                     queue_append(&queue, _engine.op_ids[2*cid+ci]);
             }
         }
@@ -403,3 +407,65 @@ void engine_free_expression(Value val)
     queue_free(&queue);
 }
 
+#ifdef __cplusplus
+Value operator+(Value a, Value b)
+{
+    return val_add(a, b);
+}
+Value operator+(Value a, float b)
+{
+    return val_add(a, make_value(b));
+}
+Value operator+(float a, Value b)
+{
+    return val_add(make_value(a), b);
+}
+
+Value operator*(Value a, Value b)
+{
+    return val_mul(a, b);
+}
+Value operator*(Value a, float b)
+{
+    return val_mul(a, make_value(b));
+}
+Value operator*(float a, Value b)
+{
+    return val_mul(make_value(a), b);
+}
+
+Value operator-(Value a)
+{
+    return val_neg(a);
+}
+Value operator-(Value a, Value b)
+{
+    return val_sub(a, b);
+}
+Value operator-(Value a, float b)
+{
+    return val_sub(a, make_value(b));
+}
+Value operator-(float a, Value b)
+{
+    return val_sub(make_value(a), b);
+}
+
+Value val_pow(Value a, float b)
+{
+    return val_pow(a, make_value(b));
+}
+
+Value operator/(Value a, Value b)
+{
+    return val_div(a, b);
+}
+Value operator/(Value a, float b)
+{
+    return val_div(a, make_value(b));
+}
+Value operator/(float a, Value b)
+{
+    return val_div(make_value(a), b);
+}
+#endif
