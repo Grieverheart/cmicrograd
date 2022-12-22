@@ -40,6 +40,8 @@ void nn_layer_create(Layer* layer, size_t num_inputs, size_t num_outputs)
 
 void nn_layer_free(Layer* layer)
 {
+    for(size_t ni = 0; ni < layer->num_neurons; ++ni)
+        nn_neuron_free(&layer->neurons[ni]);
     free(layer->neurons);
 }
 
@@ -101,15 +103,17 @@ void nn_mlp_create(MLP* mlp, size_t* sizes, size_t num_sizes)
 void nn_mlp_free(MLP* mlp)
 {
     free(mlp->sizes);
+    for(size_t li = 0; li < mlp->num_layers; ++li)
+        nn_layer_free(&mlp->layers[li]);
     free(mlp->layers);
 }
 
-Value* nn_mlp_forward(const Layer* layers, size_t num_layers, const Value* x)
+Value* nn_mlp_forward(const MLP* mlp, const Value* x)
 {
-    Value* y = nn_layer_forward(&layers[0], x);
-    for(size_t li = 1; li < num_layers; ++li)
+    Value* y = nn_layer_forward(&mlp->layers[0], x);
+    for(size_t li = 1; li < mlp->num_layers; ++li)
     {
-        Value* r = nn_layer_forward(&layers[li], y);
+        Value* r = nn_layer_forward(&mlp->layers[li], y);
         free(y);
         y = r;
     }

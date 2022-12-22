@@ -2,6 +2,29 @@
 #include <stdbool.h>
 #include <math.h>
 
+// TODO:
+//     * How should we really free subexpressions? When e.g. doing
+//       nn_mlp_forward(), new Values are created which refer to the MLP
+//       parameters. If I were to free the expression, it would also free the
+//       MLP parameters.
+//     * It might be nice to be able to recognize disjoint graphs and be able
+//       to walk them. This can e.g. be done by keeping an array with graph
+//       ids of each Value. Furthermore to make things not slow, you need to
+//       keep a list of Value ids belonging to a graph. It's generally
+//       complicated and I'm trying to avoid that for a single header library.
+//     * At some point, as the graphs grow, it might be better to switch to
+//       hashmaps.
+
+// Possible options for memory management:
+//
+// 1) Add a make_parameter() call which will mark the created values as such
+//    and not free them when doing engine_free_computation(), but instead the
+//    user will have to do that explicitly.
+// 2) Ideally we'd like to do something like engine_push_computation() and
+//    engine_pop_computation(). Then we'd probably need a variable telling us
+//    on which computational graph id a value is on. Everything on that
+//    computational graph will then be free'd on popping.
+
 enum Operation
 {
     OP_NOP,
@@ -39,10 +62,10 @@ typedef struct
 
 typedef struct
 {
-    float*     data;
-    float*     grad;
-    int*       op;
-    size_t*    op_ids;
+    float*  data;
+    float*  grad;
+    int*    op;
+    size_t* op_ids;
 
     Queue free_queue;
 
@@ -107,6 +130,14 @@ void queue_free(Queue* queue)
     free(queue->data);
 }
 
+void val_print(Value val)
+{
+    float data = _engine.data[val.id];
+    float grad = _engine.grad[val.id];
+    int op = _engine.op[val.id];
+    printf("Value(data=%f, grad=%f, op=%s)\n", data, grad, OP_LABELS[(int)op]);
+}
+
 Value _make_value(float data, size_t* op_ids, int op)
 {
     if(_engine.free_queue.head == _engine.free_queue.tail)
@@ -114,10 +145,10 @@ Value _make_value(float data, size_t* op_ids, int op)
         size_t size_values_old = _engine.size_values;
         _engine.size_values *= 3;
         _engine.size_values /= 2;
-        _engine.data   = (float*) realloc((void*)_engine.data, _engine.size_values * sizeof(float));
-        _engine.grad   = (float*) realloc((void*)_engine.grad, _engine.size_values * sizeof(float));
-        _engine.op     = (int*) realloc((void*)_engine.op, _engine.size_values * sizeof(int));
-        _engine.op_ids = (size_t*) realloc((void*)_engine.op_ids, 2 * _engine.size_values * sizeof(size_t));
+        _engine.data      = (float*) realloc((void*)_engine.data, _engine.size_values * sizeof(float));
+        _engine.grad      = (float*) realloc((void*)_engine.grad, _engine.size_values * sizeof(float));
+        _engine.op        = (int*) realloc((void*)_engine.op, _engine.size_values * sizeof(int));
+        _engine.op_ids    = (size_t*) realloc((void*)_engine.op_ids, 2 * _engine.size_values * sizeof(size_t));
         queue_resize(&_engine.free_queue, _engine.size_values);
         for(size_t i = size_values_old; i < _engine.size_values; ++i)
             queue_append(&_engine.free_queue, i);
@@ -264,14 +295,6 @@ void _backward(size_t id)
     }
 }
 
-void val_print(Value val)
-{
-    float data = _engine.data[val.id];
-    float grad = _engine.grad[val.id];
-    int op = _engine.op[val.id];
-    printf("Value(data=%f, grad=%f, op=%s)\n", data, grad, OP_LABELS[(int)op]);
-}
-
 #if 0
 void val_backward(Value val)
 {
@@ -359,7 +382,7 @@ void val_backward(Value val)
 
 void engine_init(void)
 {
-    _engine.max_id  = 0;
+    _engine.max_id      = 0;
     _engine.size_values = 10;
     _engine.data   = (float*) malloc(_engine.size_values * sizeof(float));
     _engine.grad   = (float*) malloc(_engine.size_values * sizeof(float));
@@ -380,20 +403,22 @@ void engine_free(void)
     queue_free(&_engine.free_queue);
 }
 
+// @todo:
+// what about max_id? Should that change?
 void engine_free_expression(Value val)
 {
     Queue queue;
     queue_create(&queue, _engine.max_id + 1);
     bool* visited = (bool*) calloc((_engine.max_id + 1), 1);
 
-    _engine.grad[val.id] = 1.0;
-
+    queue_append(&queue, val.id);
     while(queue.head != queue.tail)
     {
         size_t cid = queue_pop(&queue);
-        queue_append(&_engine.free_queue, cid);
         if(!visited[cid])
         {
+            queue_append(&_engine.free_queue, cid);
+
             visited[cid] = true;
             for(size_t ci = 0; ci < 2; ++ci)
             {

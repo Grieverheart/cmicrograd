@@ -55,6 +55,17 @@ int main(int argc, char* arv[])
         Value* params = nn_mlp_params(&mlp, &num_params);
         printf("%lu\n", num_params);
         free(params);
+
+        Value x[784];
+        for(size_t i = 0; i < 784; ++i)
+            x[i] = make_value(1.0/784.0);
+        Value* y = nn_mlp_forward(&mlp, x);
+        for(size_t i = 0; i < 10; ++i)
+            val_backward(y[i]);
+        //for(size_t i = 0; i < 784; ++i)
+        //    val_print(x[i]);
+        printf("%lu\n", _engine.max_id);
+        free(y);
     }
     nn_mlp_free(&mlp);
     engine_free();
