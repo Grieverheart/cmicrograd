@@ -24,6 +24,24 @@ void test_more_ops(void)
 {
     engine_computation_push();
 
+    // @note: Perhaps a possibility to make a parser for computations similar
+    // to __asm__.
+    //Computation computation = make_computation(
+    //    "%0 = -4.0;"
+    //    "%1 = 2.0;"
+    //    "c = %0 + %1;"
+    //    "d = %0 * %1 + %1**3;"
+    //    "c = c + c + 1;"
+    //    "c = c + 1 + c + (-%0);"
+    //    "d = d + d * 2 + relu(%1 + %0);"
+    //    "d = d + 3 * d + relu(%1 - %0);"
+    //    "e = c - d;"
+    //    "f = e**2;"
+    //    "g = f / 2;"
+    //    "g = g + 10.0 / f;",
+    //    a, b, g
+    //);
+
     Value a = make_value(-4.0);
     Value b = make_value(2.0);
     Value c = val_add(a, b);
@@ -55,10 +73,6 @@ int main(int argc, char* arv[])
     size_t sizes[] = {784, 30, 10};
     nn_mlp_create(&mlp, sizes, 3);
     {
-        size_t num_params = 0;
-        Value* params = nn_mlp_params(&mlp, &num_params);
-        printf("%lu\n", num_params);
-
         engine_computation_push();
         {
             Value x[784];
@@ -70,6 +84,10 @@ int main(int argc, char* arv[])
             free(y);
         }
         engine_computation_pop();
+
+        size_t num_params = 0;
+        Value* params = nn_mlp_params(&mlp, &num_params);
+        printf("%lu\n", num_params);
 
         for(size_t i = 0; i < 10; ++i)
             printf("%f\n", val_grad(params[i]));
