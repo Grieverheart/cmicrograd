@@ -5,6 +5,8 @@
 
 void test_sanity_check(void)
 {
+    engine_computation_push();
+
     Value x = make_value(-4.0);
     Value z = val_add(val_add(val_mul(make_value(2), x), make_value(2)), x);
     Value q = val_add(val_relu(z), val_mul(z, x));
@@ -15,11 +17,13 @@ void test_sanity_check(void)
     assert(val_grad(x) == 46);
     assert(val_data(y) == -20);
 
-    engine_free_expression(y);
+    engine_computation_pop();
 }
 
 void test_more_ops(void)
 {
+    engine_computation_push();
+
     Value a = make_value(-4.0);
     Value b = make_value(2.0);
     Value c = val_add(a, b);
@@ -38,7 +42,7 @@ void test_more_ops(void)
     assert(fabs(val_grad(a) - 138.83381924198252) < 1e-3);
     assert(fabs(val_grad(b) - 645.5772594752186) < 1e-3);
 
-    engine_free_expression(g);
+    engine_computation_pop();
 }
 
 int main(int argc, char* arv[])
@@ -54,20 +58,26 @@ int main(int argc, char* arv[])
         size_t num_params = 0;
         Value* params = nn_mlp_params(&mlp, &num_params);
         printf("%lu\n", num_params);
-        free(params);
 
-        Value x[784];
-        for(size_t i = 0; i < 784; ++i)
-            x[i] = make_value(1.0/784.0);
-        Value* y = nn_mlp_forward(&mlp, x);
+        engine_computation_push();
+        {
+            Value x[784];
+            for(size_t i = 0; i < 784; ++i)
+                x[i] = make_value(1.0/784.0);
+            Value* y = nn_mlp_forward(&mlp, x);
+            for(size_t i = 0; i < 10; ++i)
+                val_backward(y[i]);
+            free(y);
+        }
+        engine_computation_pop();
+
         for(size_t i = 0; i < 10; ++i)
-            val_backward(y[i]);
-        //for(size_t i = 0; i < 784; ++i)
-        //    val_print(x[i]);
-        printf("%lu\n", _engine.max_id);
-        free(y);
+            printf("%f\n", val_grad(params[i]));
+
+        free(params);
     }
     nn_mlp_free(&mlp);
+
     engine_free();
 
     return 0;

@@ -50,6 +50,7 @@ static const char* OP_LABELS[] =
 typedef struct
 {
     size_t id;
+    size_t cid;
 } Value;
 
 typedef struct
@@ -65,12 +66,15 @@ typedef struct
     float*  data;
     float*  grad;
     int*    op;
-    size_t* op_ids;
+    Value*  op_ids;
+    size_t  num_values;
+    size_t  size_values;
+} Computation;
 
-    Queue free_queue;
-
-    size_t max_id;
-    size_t size_values;
+typedef struct
+{
+    size_t current_computation;
+    Computation computation_stack[100];
 } Engine;
 
 static Engine _engine;
@@ -132,38 +136,39 @@ void queue_free(Queue* queue)
 
 void val_print(Value val)
 {
-    float data = _engine.data[val.id];
-    float grad = _engine.grad[val.id];
-    int op = _engine.op[val.id];
+    assert(val.cid <= _engine.current_computation);
+    float data = _engine.computation_stack[val.cid].data[val.id];
+    float grad = _engine.computation_stack[val.cid].grad[val.id];
+    int op = _engine.computation_stack[val.cid].op[val.id];
     printf("Value(data=%f, grad=%f, op=%s)\n", data, grad, OP_LABELS[(int)op]);
 }
 
-Value _make_value(float data, size_t* op_ids, int op)
+Value _make_value(float data, Value* op_ids, int op)
 {
-    if(_engine.free_queue.head == _engine.free_queue.tail)
+    size_t cid = _engine.current_computation;
+    Computation* computation = &_engine.computation_stack[cid];
+
+    if(computation->num_values == computation->size_values)
     {
-        size_t size_values_old = _engine.size_values;
-        _engine.size_values *= 3;
-        _engine.size_values /= 2;
-        _engine.data      = (float*) realloc((void*)_engine.data, _engine.size_values * sizeof(float));
-        _engine.grad      = (float*) realloc((void*)_engine.grad, _engine.size_values * sizeof(float));
-        _engine.op        = (int*) realloc((void*)_engine.op, _engine.size_values * sizeof(int));
-        _engine.op_ids    = (size_t*) realloc((void*)_engine.op_ids, 2 * _engine.size_values * sizeof(size_t));
-        queue_resize(&_engine.free_queue, _engine.size_values);
-        for(size_t i = size_values_old; i < _engine.size_values; ++i)
-            queue_append(&_engine.free_queue, i);
+        computation->size_values *= 3;
+        computation->size_values /= 2;
+        computation->data      = (float*) realloc((void*)computation->data, computation->size_values * sizeof(float));
+        computation->grad      = (float*) realloc((void*)computation->grad, computation->size_values * sizeof(float));
+        computation->op        = (int*) realloc((void*)computation->op, computation->size_values * sizeof(int));
+        computation->op_ids    = (Value*) realloc((void*)computation->op_ids, 2 * computation->size_values * sizeof(Value));
     }
 
-    size_t id = queue_pop(&_engine.free_queue);
-    if(id > _engine.max_id) _engine.max_id = id;
+    size_t id = computation->num_values++;
 
-    _engine.data[id]       = data;
-    _engine.grad[id]       = 0.0f;
-    _engine.op[id]         = op;
-    _engine.op_ids[2*id+0] = op_ids? op_ids[0]: (size_t)(-1);
-    _engine.op_ids[2*id+1] = op_ids? op_ids[1]: (size_t)(-1);
+    Value dummy = {-1,-1};
 
-    Value val = {id};
+    computation->data[id]       = data;
+    computation->grad[id]       = 0.0f;
+    computation->op[id]         = op;
+    computation->op_ids[2*id+0] = op_ids? op_ids[0]: dummy;
+    computation->op_ids[2*id+1] = op_ids? op_ids[1]: dummy;
+
+    Value val = {id, cid};
     return val;
 }
 
@@ -174,48 +179,49 @@ Value make_value(float data)
 
 Value val_add(Value a, Value b)
 {
-    size_t op_ids[2] = {a.id, b.id};
-    float data_a = _engine.data[a.id];
-    float data_b = _engine.data[b.id];
+    Value op_ids[2] = {a, b};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
+    float data_b = _engine.computation_stack[b.cid].data[b.id];
     return _make_value(data_a + data_b, op_ids, OP_ADD);
 }
 
 Value val_sub(Value a, Value b)
 {
-    size_t op_ids[2] = {a.id, b.id};
-    float data_a = _engine.data[a.id];
-    float data_b = _engine.data[b.id];
+    Value op_ids[2] = {a, b};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
+    float data_b = _engine.computation_stack[b.cid].data[b.id];
     return _make_value(data_a - data_b, op_ids, OP_SUB);
 }
 
 Value val_mul(Value a, Value b)
 {
-    size_t op_ids[2] = {a.id, b.id};
-    float data_a = _engine.data[a.id];
-    float data_b = _engine.data[b.id];
+    Value op_ids[2] = {a, b};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
+    float data_b = _engine.computation_stack[b.cid].data[b.id];
     return _make_value(data_a * data_b, op_ids, OP_MUL);
 }
 
 Value val_div(Value a, Value b)
 {
-    size_t op_ids[2] = {a.id, b.id};
-    float data_a = _engine.data[a.id];
-    float data_b = _engine.data[b.id];
+    Value op_ids[2] = {a, b};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
+    float data_b = _engine.computation_stack[b.cid].data[b.id];
     return _make_value(data_a / data_b, op_ids, OP_DIV);
 }
 
 Value val_pow(Value a, Value b)
 {
-    size_t op_ids[2] = {a.id, b.id};
-    float data_a = _engine.data[a.id];
-    float data_b = _engine.data[b.id];
+    Value op_ids[2] = {a, b};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
+    float data_b = _engine.computation_stack[b.cid].data[b.id];
     return _make_value(pow(data_a, data_b), op_ids, OP_POW);
 }
 
 Value val_relu(Value a)
 {
-    size_t op_ids[2] = {a.id, (size_t)(-1)};
-    float data_a = _engine.data[a.id];
+    Value dummy = {-1,-1};
+    Value op_ids[2] = {a, dummy};
+    float data_a = _engine.computation_stack[a.cid].data[a.id];
     return _make_value(data_a < 0.0 ? 0.0: data_a, op_ids, OP_RELU);
 }
 
@@ -226,65 +232,68 @@ Value val_neg(Value a)
 
 float val_data(Value a)
 {
-    return _engine.data[a.id];
+    assert(a.cid == _engine.current_computation);
+    return _engine.computation_stack[a.cid].data[a.id];
 }
 
 float val_grad(Value a)
 {
-    return _engine.grad[a.id];
+    assert(a.cid == _engine.current_computation);
+    return _engine.computation_stack[a.cid].grad[a.id];
 }
 
-void _backward(size_t id)
+void _backward(size_t id, size_t cid)
 {
-    const size_t* op_ids = _engine.op_ids + 2 * id;
-    float val_grad = _engine.grad[id];
-    switch(_engine.op[id])
+    Computation* computation = &_engine.computation_stack[cid];
+    const Value* op_ids = computation->op_ids + 2 * id;
+    float val_grad = computation->grad[id];
+    switch(computation->op[id])
     {
         case OP_ADD:
         {
-            _engine.grad[op_ids[0]] += val_grad;
-            _engine.grad[op_ids[1]] += val_grad;
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += val_grad;
+            _engine.computation_stack[op_ids[1].cid].grad[op_ids[1].id] += val_grad;
         }
         break;
 
         case OP_SUB:
         {
-            _engine.grad[op_ids[0]] += val_grad;
-            _engine.grad[op_ids[1]] -= val_grad;
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += val_grad;
+            _engine.computation_stack[op_ids[1].cid].grad[op_ids[1].id] -= val_grad;
         }
         break;
 
         case OP_MUL:
         {
-            float data_a = _engine.data[op_ids[0]];
-            float data_b = _engine.data[op_ids[1]];
-            _engine.grad[op_ids[0]] += data_b * val_grad;
-            _engine.grad[op_ids[1]] += data_a * val_grad;
+            float data_a = _engine.computation_stack[op_ids[0].cid].data[op_ids[0].id];
+            float data_b = _engine.computation_stack[op_ids[1].cid].data[op_ids[1].id];
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += data_b * val_grad;
+            _engine.computation_stack[op_ids[1].cid].grad[op_ids[1].id] += data_a * val_grad;
         }
         break;
 
         case OP_DIV:
         {
-            float data_a = _engine.data[op_ids[0]];
-            float data_b = _engine.data[op_ids[1]];
-            _engine.grad[op_ids[0]] += (1.0 / data_b) * val_grad;
-            _engine.grad[op_ids[1]] -= (data_a / sqr(data_b)) * val_grad;
+            float data_a = _engine.computation_stack[op_ids[0].cid].data[op_ids[0].id];
+            float data_b = _engine.computation_stack[op_ids[1].cid].data[op_ids[1].id];
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += (1.0 / data_b) * val_grad;
+            _engine.computation_stack[op_ids[1].cid].grad[op_ids[1].id] -= (data_a / sqr(data_b)) * val_grad;
         }
         break;
 
         case OP_POW:
         {
-            float data_a = _engine.data[op_ids[0]];
-            float data_b = _engine.data[op_ids[1]];
-            _engine.grad[op_ids[0]] += (data_b * pow(data_a, data_b - 1.0)) * val_grad;
-            _engine.grad[op_ids[1]] += pow(data_a, data_b) * log(data_a) * val_grad;
+            float data_a = _engine.computation_stack[op_ids[0].cid].data[op_ids[0].id];
+            float data_b = _engine.computation_stack[op_ids[1].cid].data[op_ids[1].id];
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += (data_b * pow(data_a, data_b - 1.0)) * val_grad;
+            _engine.computation_stack[op_ids[1].cid].grad[op_ids[1].id] += pow(data_a, data_b) * log(data_a) * val_grad;
         }
         break;
 
         case OP_RELU:
         {
-            float data_a = _engine.data[op_ids[0]];
-            _engine.grad[op_ids[0]] += (data_a > 0.0) * val_grad;
+            float data_a = _engine.computation_stack[op_ids[0].cid].data[op_ids[0].id];
+            _engine.computation_stack[op_ids[0].cid].grad[op_ids[0].id] += (data_a > 0.0) * val_grad;
         }
         break;
 
@@ -344,92 +353,99 @@ void val_backward(Value val)
     queue_free(&queue);
 }
 #else
-void build_topo(size_t cid, bool* visited, Queue* queue)
+void build_topo(size_t id, size_t cid, bool** visited, Queue* id_queue, Queue* cid_queue)
 {
-    if(visited[cid])
+    if(visited[cid][id])
         return;
 
-    visited[cid] = true;
+    visited[cid][id] = true;
     for(size_t ci = 0; ci < 2; ++ci)
     {
-        size_t child_cid = _engine.op_ids[2*cid+ci];
-        if(child_cid != (size_t)(-1))
+        Value child = _engine.computation_stack[cid].op_ids[2*id+ci];
+        if(child.id != (size_t)(-1))
         {
-            build_topo(child_cid, visited, queue);
+            build_topo(child.id, child.cid, visited, id_queue, cid_queue);
         }
     }
-    queue_append(queue, cid);
+    queue_append(id_queue, id);
+    queue_append(cid_queue, cid);
 }
 
 void val_backward(Value val)
 {
-    Queue queue;
-    queue_create(&queue, _engine.max_id + 1);
-    bool* visited = (bool*) calloc((_engine.max_id + 1), 1);
-    build_topo(val.id, visited, &queue);
-    free(visited);
-
-    _engine.grad[val.id] = 1.0;
-    while(queue.head != queue.tail)
+    size_t num_values = 0;
+    bool** visited = (bool**) malloc((_engine.current_computation + 1) * sizeof(bool*));
+    for(size_t i = 0; i <= _engine.current_computation; ++i)
     {
-        size_t cid = queue_pop_back(&queue);
-        _backward(cid);
+        visited[i] = (bool*) calloc(_engine.computation_stack[i].num_values, 1);
+        num_values += _engine.computation_stack[i].num_values;
     }
 
-    queue_free(&queue);
+    Queue id_queue, cid_queue;
+    queue_create(&id_queue, num_values);
+    queue_create(&cid_queue, num_values);
+
+    build_topo(val.id, val.cid, visited, &id_queue, &cid_queue);
+
+    for(size_t i = 0; i <= _engine.current_computation; ++i)
+        free(visited[i]);
+    free(visited);
+
+    _engine.computation_stack[val.cid].grad[val.id] = 1.0;
+    while(id_queue.head != id_queue.tail)
+    {
+        size_t current_id = queue_pop_back(&id_queue);
+        size_t current_cid = queue_pop_back(&cid_queue);
+        _backward(current_id, current_cid);
+    }
+
+    queue_free(&id_queue);
+    queue_free(&cid_queue);
 }
 #endif
 
+void engine_computation_init(size_t id)
+{
+    Computation* computation = &_engine.computation_stack[id];
+
+    computation->num_values  = 0;
+    computation->size_values = 10;
+    computation->data   = (float*) malloc(computation->size_values * sizeof(float));
+    computation->grad   = (float*) malloc(computation->size_values * sizeof(float));
+    computation->op     = (int*) malloc(computation->size_values * sizeof(int));
+    computation->op_ids = (Value*) malloc(2 * computation->size_values * sizeof(Value));
+}
+
 void engine_init(void)
 {
-    _engine.max_id      = 0;
-    _engine.size_values = 10;
-    _engine.data   = (float*) malloc(_engine.size_values * sizeof(float));
-    _engine.grad   = (float*) malloc(_engine.size_values * sizeof(float));
-    _engine.op     = (int*) malloc(_engine.size_values * sizeof(int));
-    _engine.op_ids = (size_t*) malloc(2 * _engine.size_values * sizeof(size_t));
+    _engine.current_computation = 0;
+    engine_computation_init(0);
+}
 
-    queue_create(&_engine.free_queue, _engine.size_values);
-    for(size_t i = 0; i < _engine.size_values; ++i)
-        queue_append(&_engine.free_queue, i);
+void engine_computation_free(size_t id)
+{
+    assert(_engine.current_computation == 0);
+    Computation* computation = &_engine.computation_stack[id];
+    free(computation->data);
+    free(computation->grad);
+    free(computation->op);
+    free(computation->op_ids);
 }
 
 void engine_free(void)
 {
-    free(_engine.data);
-    free(_engine.grad);
-    free(_engine.op);
-    free(_engine.op_ids);
-    queue_free(&_engine.free_queue);
+    for(size_t i = 0; i <= _engine.current_computation; ++i)
+        engine_computation_free(i);
 }
 
-// @todo:
-// what about max_id? Should that change?
-void engine_free_expression(Value val)
+void engine_computation_push(void)
 {
-    Queue queue;
-    queue_create(&queue, _engine.max_id + 1);
-    bool* visited = (bool*) calloc((_engine.max_id + 1), 1);
+    engine_computation_init(++_engine.current_computation);
+}
 
-    queue_append(&queue, val.id);
-    while(queue.head != queue.tail)
-    {
-        size_t cid = queue_pop(&queue);
-        if(!visited[cid])
-        {
-            queue_append(&_engine.free_queue, cid);
-
-            visited[cid] = true;
-            for(size_t ci = 0; ci < 2; ++ci)
-            {
-                if(_engine.op_ids[2*cid+ci] != (size_t)(-1))
-                    queue_append(&queue, _engine.op_ids[2*cid+ci]);
-            }
-        }
-    }
-
-    free(visited);
-    queue_free(&queue);
+void engine_computation_pop(void)
+{
+    engine_computation_free(_engine.current_computation--);
 }
 
 #ifdef __cplusplus
